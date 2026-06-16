@@ -1,36 +1,62 @@
-FROM python:3.13-slim
+# =========================
+# Base stage (shared)
+# =========================
+FROM python:3.13-slim AS base
 
-
-
-ENV PYTHONUNBUFFERED=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gettext \
- && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /code
 
-RUN pip install --upgrade pip
+RUN apt-get update && apt-get install -y \
+    gettext \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
 
-# 1. Install Poetry explicitly
-RUN pip install poetry
+RUN pip install --upgrade pip \
+    && pip install poetry
 
-# 2. Copy dependency files first (for Docker caching)
 COPY pyproject.toml poetry.lock ./
 
-# 3. CRITICAL FIX: Configure poetry to NOT use a virtualenv
-#    and install dependencies globally.
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-root --no-interaction --no-ansi
 
-# 4. Copy the startup script and make it executable
+
+# =========================
+# Development stage
+# =========================
+FROM base AS development
+
+# Install ALL dependencies (including dev + test)
+RUN poetry install --no-root
+
+# Install Playwright browsers + system deps
+RUN poetry run playwright install --with-deps
+
 COPY start-django.sh /code/start-django.sh
 RUN chmod +x /code/start-django.sh
 
-# 5. Copy the rest of the application
 COPY . .
 
 EXPOSE 8000
+
+ENTRYPOINT ["/code/start-django.sh"]
+
+
+# =========================
+# Production stage
+# =========================
+FROM base AS production
+
+# Install ONLY production dependencies
+RUN poetry install --no-root --only main
+
+COPY start-django.sh /code/start-django.sh
+RUN chmod +x /code/start-django.sh
+
+COPY . .
+
+EXPOSE 8000
+
+ENV ENV_STATE=production
 
 ENTRYPOINT ["/code/start-django.sh"]

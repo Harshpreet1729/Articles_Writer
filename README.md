@@ -1,60 +1,238 @@
 # WriteYourOwn
 
-WriteYourOwn is a Django-based writing platform where users can sign up, create and manage articles, and track writing output (article count and word count) from a personalized dashboard.
+<p align="center">
+  <img src="templates/svgs/magnifier.svg" alt="WriteYourOwn icon" width="54">
+</p>
 
-The app is designed for both local development and production deployment (Railway), with flexible email provider support through `django-allauth` + `django-anymail`.
+WriteYourOwn is a Django writing platform built around one clear loop: authenticate, write, organize, measure, and ship content. The project uses a custom email-first user model, article ownership rules, automatic word counting, search, and production-friendly deployment settings.
 
-## Features
+## Workflow-First Overview
 
-- Email-first authentication with custom user model (`email` as login field)
-- Signup/login/account flows powered by `django-allauth`
-- Article CRUD (create, update, delete) with ownership checks
-- Per-user article list with pagination
-- Search support on article titles (PostgreSQL full-text search)
-- Automatic word count calculation from article content
-- Customizable admin URL via environment variable (`ADMIN_URL`)
-- Production-ready static file serving with WhiteNoise
-- Email delivery via Mailjet API or Mailgun API
-
-## Tech Stack
-
-- Python 3.13
-- Django 6
-- PostgreSQL
-- django-allauth
-- django-anymail
-- Gunicorn
-- WhiteNoise
-- Docker + Docker Compose
-- Tailwind CSS (frontend styling assets)
-- Pytest + Playwright (test tooling)
-
-## Project Structure
-
-```text
-app/                    # Main app (models, views, URLs, admin)
-djangoproject/          # Project settings and root URL config
-templates/              # Django templates
-static/                 # Static assets
-tests/                  # Test suite (pytest + playwright)
-Dockerfile
-docker-compose.yml
-start-django.sh
+```mermaid
+flowchart LR
+    A[Visitor lands on site] --> B[Signup page at /]
+    B --> C[Allauth authentication]
+    C --> D[User account created with email as login]
+    D --> E[Redirect to article workspace]
+    E --> F[Create article]
+    E --> G[Search personal articles]
+    E --> H[Update owned article]
+    E --> I[Delete owned article]
+    F --> J[Word count auto-calculated]
+    H --> J
+    J --> K[Dashboard reflects article count + total written words]
 ```
 
-## Quick Start (Poetry)
+WriteYourOwn is designed as a personal writing workspace, not a public publishing feed. Every major flow is centered on the authenticated user and their own article set.
 
-### 1. Clone and install
+## Application Workflow
+
+```mermaid
+flowchart TD
+    A[Browser Request] --> B{Requested URL}
+    B -->|/| C[SignupView]
+    B -->|/accounts/*| D[django-allauth routes]
+    B -->|/articles/| E[ArticleListView]
+    B -->|/articles/create/| F[ArticleCreateView]
+    B -->|/articles/<pk>/update/| G[ArticleUpdateView]
+    B -->|/articles/<pk>/delete/| H[ArticleDeleteView]
+    B -->|/<ADMIN_URL>/| I[Django Admin]
+
+    C --> J[Create or authenticate user]
+    D --> J
+    E --> K[Filter by request.user]
+    F --> L[Attach creator before save]
+    G --> M[Allow only owner]
+    H --> N[Allow only owner + success message]
+```
+
+The routing strategy is intentionally simple: authentication is front-loaded, article actions live under `/articles/`, and the admin path is environment-controlled through `ADMIN_URL`.
+
+## Authentication and Access Control Workflow
+
+```mermaid
+flowchart TD
+    A[User enters email credentials] --> B[allauth backend]
+    B --> C[Custom UserProfile model]
+    C --> D[USERNAME_FIELD = email]
+    D --> E[Successful login]
+    E --> F[LOGIN_REDIRECT_URL = home]
+
+    G[Anonymous request to article page] --> H[LoginRequiredMixin]
+    H --> I[Redirect to login flow]
+
+    J[Update/Delete request] --> K[UserPassesTestMixin]
+    K --> L{request.user == article.creator}
+    L -->|Yes| M[Allow edit or delete]
+    L -->|No| N[Reject access]
+```
+
+Theory: the project combines `django-allauth` with a custom `AbstractUser` extension so email becomes the primary identity. Authorization is then enforced at the view layer, especially for update and delete actions.
+
+## Article Lifecycle Workflow
+
+```mermaid
+flowchart LR
+    A[Writer opens create form] --> B[Enter title, status, content, twitter_post]
+    B --> C[Submit CreateView]
+    C --> D[creator = current user]
+    D --> E[Article.save()]
+    E --> F[Strip HTML-like tags from content]
+    F --> G[Count words with regex]
+    G --> H[Persist article]
+    H --> I[Redirect to article list]
+    I --> J[Paginated personal dashboard]
+```
+
+```mermaid
+flowchart LR
+    A[Existing article] --> B[Update form]
+    B --> C[Ownership check]
+    C --> D[Save updated content]
+    D --> E[Recompute word count]
+    E --> F[Refresh article list]
+```
+
+```mermaid
+flowchart LR
+    A[Delete request] --> B[Ownership check]
+    B --> C[DeleteView POST]
+    C --> D[Success message: article deleted]
+    D --> E[Redirect back to home]
+```
+
+Theory: the article model is optimized for a writer's working draft cycle. Status tracks writing progress, and `word_count` is derived automatically so metrics stay consistent without manual input.
+
+## Search and Dashboard Workflow
+
+```mermaid
+flowchart TD
+    A[User opens article list] --> B[ListView get_queryset]
+    B --> C[Base queryset = articles by current user]
+    C --> D{search query present?}
+    D -->|No| E[Order by created_at descending]
+    D -->|Yes| F[Apply title__search filter]
+    F --> E
+    E --> G[Paginate by 5]
+    G --> H[Render home template]
+
+    I[Dashboard metrics] --> J[user.Articles.count()]
+    I --> K[Sum of word_count]
+    J --> L[article_count property]
+    K --> M[written_words property]
+```
+
+Theory: the dashboard is private by design. Search only inspects the current user's articles, and model properties expose lightweight productivity metrics directly from relational data.
+
+## Configuration Workflow
+
+```mermaid
+flowchart TD
+    A[Environment variables] --> B[_env helpers normalize values]
+    B --> C[Core runtime settings]
+    C --> D[DEBUG]
+    C --> E[SECRET_KEY]
+    C --> F[DATABASE_URL]
+    C --> G[ALLOWED_HOSTS]
+    C --> H[CSRF_TRUSTED_ORIGINS]
+    C --> I[ADMIN_URL]
+
+    F --> J[dj_database_url.parse]
+    J --> K{PostgreSQL?}
+    K -->|Yes| L[Add connect_timeout]
+    K -->|No| M[Use SQLite/local DB]
+
+    A --> N[ENV_STATE]
+    N --> O{production?}
+    O -->|Yes| P[Secure cookies + proxy SSL headers]
+    O -->|No| Q[Local-friendly defaults]
+```
+
+Theory: settings are built around environment-first deployment. Local development stays fast, while production enables stricter cookie, proxy, and host handling without needing a separate settings module.
+
+## Email Delivery Workflow
+
+```mermaid
+flowchart LR
+    A[ENV_STATE + EMAIL_PROVIDER] --> B{Provider selected}
+    B -->|mailjet| C[Read Mailjet credentials]
+    B -->|mailgun| D[Read Mailgun credentials]
+    B -->|other/fallback| E[Use configured backend or console]
+
+    C --> F{Credentials present?}
+    D --> G{API key present?}
+    F -->|Yes| H[Anymail Mailjet backend]
+    F -->|No| I[Console backend + warning]
+    G -->|Yes| J[Anymail Mailgun backend]
+    G -->|No| K[Console backend + warning]
+```
+
+Theory: the email setup is failure-aware. If production credentials are incomplete, the app falls back to console email instead of crashing silently, making misconfiguration easier to spot.
+
+## Delivery Workflow
+
+```mermaid
+flowchart TD
+    A[Developer change] --> B{Run mode}
+    B -->|Poetry| C[Install dependencies]
+    B -->|Docker| D[Build containers]
+
+    C --> E[Set env vars]
+    D --> E
+    E --> F[Run migrations]
+    F --> G[Start Django app]
+    G --> H[Serve static assets]
+    H --> I[Local usage or Railway deploy]
+
+    I --> J{Railway production}
+    J -->|Yes| K[Set DATABASE_URL + ENV_STATE=production]
+    K --> L[Configure ADMIN_URL and email provider]
+    L --> M[Update Django Site domain]
+```
+
+## Project Map
+
+```mermaid
+flowchart TD
+    A[Repository Root] --> B[app/]
+    A --> C[djangoproject/]
+    A --> D[templates/]
+    A --> E[static/]
+    A --> F[tests/]
+    A --> G[Dockerfile]
+    A --> H[docker-compose.yml]
+    A --> I[start-django.sh]
+
+    B --> B1[models.py]
+    B --> B2[views.py]
+    B --> B3[urls.py]
+    C --> C1[settings.py]
+    C --> C2[urls.py]
+    F --> F1[pytest tests]
+    F --> F2[Playwright page flows]
+```
+
+## Quick Start
+
+### Poetry path
 
 ```bash
 git clone https://github.com/Harshpreet1729/WriteYourOwn.git
 cd WriteYourOwn
 poetry install
+poetry run python manage.py migrate
+poetry run python manage.py runserver
 ```
 
-### 2. Set environment variables
+### Docker path
 
-Create environment variables in your shell (or in your host environment). At minimum:
+```bash
+docker compose up --build
+```
+
+App URL: `http://127.0.0.1:8000`
+
+## Minimum Environment Variables
 
 ```env
 ENV_STATE=dev
@@ -62,96 +240,38 @@ DEBUG=True
 SECRET_KEY=change-me
 DATABASE_URL=sqlite:///db.sqlite3
 ALLOWED_HOSTS=127.0.0.1,localhost
+ADMIN_URL=admin
 ```
 
-### 3. Run migrations and start server
+## Test Workflow
 
-```bash
-poetry run python manage.py migrate
-poetry run python manage.py runserver
+```mermaid
+flowchart LR
+    A[Developer runs tests] --> B[pytest suite]
+    B --> C[Homepage checks]
+    B --> D[Signup checks]
+    B --> E[Playwright-assisted flows]
 ```
 
-App runs at `http://127.0.0.1:8000`.
-
-## Quick Start (Docker)
-
-This project includes a local Docker setup using Postgres.
-
-```bash
-docker compose up --build
-```
-
-The startup script automatically runs:
-
-- `python manage.py collectstatic --no-input`
-- `python manage.py migrate`
-- Django dev server (or Gunicorn when `ENV_STATE=production`)
-
-## Environment Variables
-
-### Core
-
-- `ENV_STATE`: `dev` or `production`
-- `DEBUG`: `True` / `False`
-- `SECRET_KEY`: Django secret key
-- `DATABASE_URL`: Database DSN (`postgresql://...` in production)
-- `ALLOWED_HOSTS`: Comma-separated hosts
-- `CSRF_TRUSTED_ORIGINS`: Optional comma-separated origins
-- `RAILWAY_PUBLIC_DOMAIN`: Railway domain auto-added to hosts/origins
-- `ADMIN_URL`: Custom admin path segment (for example `notadmin123`)
-
-### Email
-
-- `EMAIL_PROVIDER`: `mailjet`, `mailgun`, or fallback/custom backend
-- `EMAIL_FAIL_SILENTLY`: `False` recommended in production
-- `EMAIL_TIMEOUT`: API timeout in seconds (default 8)
-
-Mailjet:
-
-- `MAILJET_API_KEY`
-- `MAILJET_SECRET_KEY`
-- `MAILJET_SENDER_EMAIL` (must be verified in Mailjet)
-
-Mailgun:
-
-- `MAILGUN_API_KEY`
-- `MAILGUN_EMAIL`
-- `MAILGUN_SENDER_DOMAIN` (optional but recommended)
-
-## Railway Deployment Notes
-
-1. Set `DATABASE_URL` from Railway Postgres using variable reference:
-   - `DATABASE_URL=${{Postgres-<service>.DATABASE_URL}}`
-2. Set production env vars (`ENV_STATE=production`, `DEBUG=False`, etc.).
-3. Set a custom `ADMIN_URL` to avoid exposing `/admin/`.
-4. Configure email provider variables (Mailjet or Mailgun).
-5. After first deploy, update Django Site record so emails stop showing `example.com`:
-
-```bash
-python manage.py shell -c "from django.contrib.sites.models import Site; Site.objects.update_or_create(id=1, defaults={'domain':'your-domain.up.railway.app','name':'WriteYourOwn'})"
-```
-
-## Running Tests
+Run:
 
 ```bash
 poetry run pytest
 ```
 
-Playwright-based tests may require browser installation:
+Install Playwright browsers if needed:
 
 ```bash
 poetry run playwright install --with-deps
 ```
 
-## Common Issues
+## Common Notes
 
-- `UnknownSchemeError: Scheme '://' is unknown`:
-  `DATABASE_URL` is malformed. Use a valid `postgresql://...` URL or Railway variable reference.
-- Confirmation email says `example.com`:
-  update `django_site` record (`Site id=1`) in the production database.
-- Mail sent locally but not in production:
-  verify sender identity and provider credentials; keep `EMAIL_FAIL_SILENTLY=False` to surface real errors.
+- Search uses PostgreSQL full-text search on article titles.
+- Static files are served with WhiteNoise.
+- The admin URL is intentionally customizable.
+- Production uses secure cookie and proxy-aware settings when `ENV_STATE=production`.
 
 ## Author
 
-- Harshpreet1729
+Harshpreet1729
