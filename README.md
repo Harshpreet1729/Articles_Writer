@@ -76,7 +76,7 @@ flowchart LR
     A[Writer opens create form] --> B[Enter title, status, content, twitter_post]
     B --> C[Submit CreateView]
     C --> D[creator = current user]
-    D --> E[Article.save()]
+    D --> E[Article save method]
     E --> F[Strip HTML-like tags from content]
     F --> G[Count words with regex]
     G --> H[Persist article]
@@ -116,8 +116,8 @@ flowchart TD
     E --> G[Paginate by 5]
     G --> H[Render home template]
 
-    I[Dashboard metrics] --> J[user.Articles.count()]
-    I --> K[Sum of word_count]
+    I[Dashboard metrics] --> J[Count owned articles]
+    I --> K[Sum stored word counts]
     J --> L[article_count property]
     K --> M[written_words property]
 ```
